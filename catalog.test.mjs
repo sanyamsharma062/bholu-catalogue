@@ -37,6 +37,25 @@ test('Workable index streams India listings with original links, dates, and clea
   await assert.rejects(fetchWorkableIndex(async () => response(xml.slice(0, -9))), /Incomplete/);
 });
 
+test('Workable employer widgets preserve public dates, secondary India locations and plain-text details', async () => {
+  const [board] = boardsFrom([['workable', 'team', 'Example']]);
+  const result = await fetchBoard(board, async url => {
+    assert.equal(url, 'https://apply.workable.com/api/v1/widget/accounts/team?details=true');
+    return Response.json({ jobs: [{
+      shortcode: 'EX123', title: 'Graduate Engineer', published_on: '2026-11-24',
+      created_at: '2026-11-12', description: '<p>Build Java APIs.</p>', telecommuting: true,
+      locations: [{ city: 'London', country: 'United Kingdom' },
+        { city: 'Bengaluru', region: 'Karnataka', countryCode: 'IN' },
+        { city: 'Private', hidden: true }],
+    }] });
+  });
+  assert.equal(result.jobs[0].posted, '2026-11-23T18:30:00.000Z');
+  assert.match(result.jobs[0].location, /Bengaluru, Karnataka, India/);
+  assert.doesNotMatch(result.jobs[0].location, /Private/);
+  assert.equal(result.jobs[0].description, 'Build Java APIs.');
+  assert.equal(result.jobs[0].workplace, 'Remote');
+});
+
 test('directory probes different providers, skips recent failures, and survives one source failing', async () => {
   const database = {
     query: async () => ({ rows: [

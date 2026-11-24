@@ -1,4 +1,13 @@
 [
+  ["workable", "caxton", "Caxton Associates"],
+  ["workable", "prox-works", "Proximity Works"],
+  ["workable", "updraft", "Updraft"],
+  ["workable", "smartstream", "Smartstream"],
+  ["workable", "tecsys", "Tecsys"],
+  ["workable", "botsync-1", "Botsync"],
+  ["workable", "jove", "JoVE"],
+  ["workable", "2070health", "2070Health"],
+  ["workable", "zyte", "Zyte"],
   ["workday", "https://cengage.wd5.myworkdayjobs.com/cengageindiacareers", "Cengage"],
   ["icims", "careers-en-nortal", "Nortal"],
   ["speedrun", "speedrun", "a16z Speedrun Talent Network"],

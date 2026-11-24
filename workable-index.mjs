@@ -61,7 +61,7 @@ export async function fetchWorkableIndex(fetcher = fetch) {
   let bytes = 0;
   for await (const chunk of response.body) {
     bytes += chunk.length;
-    if (bytes > 360 * 1024 * 1024) throw new Error('Workable feed exceeds size limit');
+    if (bytes > 1536 * 1024 * 1024) throw new Error('Workable feed exceeds size limit');
     parser.write(decoder.decode(chunk, { stream: true }));
   }
   parser.end(decoder.decode());

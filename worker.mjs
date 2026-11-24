@@ -45,7 +45,9 @@ async function refresh() {
           await replaceFeed(pool, feed, jobs, { complete });
           console.log(`${feed.id}: ${jobs.length} postings${complete ? '' : ' (partial)'}`);
         } catch (error) {
-          const failure = /^HTTP \d{3}$/.test(error.message) ? error.message : error.name === 'TimeoutError' ? 'Timed out' : 'Feed unavailable';
+          const diagnostic = /^(?:HTTP \d{3}|Incomplete Workable feed|Workable(?: India)? feed exceeds (?:size|listing) limit)$/;
+          const failure = diagnostic.test(error.message) ? error.message
+            : error.name === 'TimeoutError' || error.name === 'AbortError' ? 'Timed out' : 'Feed unavailable';
           await recordFailure(pool, feed, failure);
           console.warn(`${feed.id}: ${failure}`);
         }

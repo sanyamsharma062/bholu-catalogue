@@ -350,7 +350,7 @@ function amazonDate(value) {
 
 async function fetchWidgetBoard({ token, employer, provider }, fetcher) {
   const endpoint = {
-    workable: `https://apply.workable.com/api/v1/widget/accounts/${token}`,
+    workable: `https://apply.workable.com/api/v1/widget/accounts/${token}?details=true`,
     recruitee: `https://${token}.recruitee.com/api/offers/`,
     bamboohr: `https://${token}.bamboohr.com/careers/list`,
   }[provider];
@@ -363,16 +363,25 @@ async function fetchWidgetBoard({ token, employer, provider }, fetcher) {
     const location = typeof row.location === 'string' ? row.location : [
       row.location?.city, row.location?.state, row.location?.country,
     ].filter(Boolean).join(', ');
-    const place = [location, row.city, row.state, row.country, row.remote === true || row.isRemote === true ? 'Remote' : '']
-      .filter(value => typeof value === 'string' && value.trim()).join(', ');
+    const workable = provider === 'workable';
+    const additional = workable && Array.isArray(row.locations) ? row.locations
+      .filter(place => place && place.hidden !== true)
+      .map(place => [place.city, place.region, place.country ?? (place.countryCode === 'IN' ? 'India' : '')]
+        .filter(value => typeof value === 'string' && value.trim()).join(', ')) : [];
+    const remote = row.remote === true || row.isRemote === true || (workable && row.telecommuting === true);
+    const places = additional.some(value => value.trim())
+      ? additional : [[location, row.city, row.state, row.country]
+          .filter(value => typeof value === 'string' && value.trim()).join(', ')];
+    const place = [...new Set([...places.filter(Boolean), ...(remote ? ['Remote'] : [])])].join(' / ');
     const id = /^\d+$/.test(row.id ?? '') ? row.id : null;
     const url = provider === 'bamboohr' ? (id && `https://${token}.bamboohr.com/careers/${id}`)
       : row.url ?? row.careers_url ?? (provider === 'workable' && /^[a-z0-9]+$/i.test(row.shortcode ?? '')
         ? `https://apply.workable.com/${token}/j/${row.shortcode}/` : null);
     const job = jobFrom({ title: row.title ?? row.jobOpeningName, employer, location: place,
       url, description: row.description, source: providers[provider],
-      posted: row.published_at ?? row.date_posted, kind: row.employment_type,
-      workplace: row.remote === true || row.isRemote === true ? 'Remote' : undefined });
+      posted: workable ? indiaDate(row.published_on ?? row.published_at ?? row.date_posted)
+        : row.published_at ?? row.date_posted,
+      kind: row.employment_type, workplace: remote ? 'Remote' : undefined });
     if (job) jobs.set(job.id, job);
   }
   if (rows.length > 0 && jobs.size === 0) throw new Error('No usable widget listings');

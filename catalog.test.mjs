@@ -124,17 +124,48 @@ test('directory probes different providers, skips recent failures, and survives 
     { platform: 'ashby', slug: 'active', name: 'Active' },
     { platform: 'lever', slug: 'new', name: 'New' },
   ];
-  const workday = ['phreesia|wd1|phreesiaindia', 'badhost|wd1|india'];
-  const fetcher = async url => Response.json(url.includes('workday_companies') ? workday : directory);
+  const workday = ['phreesia|wd1|phreesiaindia', 'badhost|wd1|../india'];
+  const fetcher = async url => {
+    if (url.includes('workday_companies')) return Response.json(workday);
+    if (url.endsWith('/companies.json')) return Response.json(directory);
+    return new Response('', { status: 503 });
+  };
   const boards = await discoverBoards(database, [], fetcher);
   assert.deepEqual(boards.slice(0, 4).map(board => board.provider), ['ashby', 'greenhouse', 'lever', 'workday']);
   assert.equal(boards.filter(board => board.provider === 'greenhouse').length, 6);
   assert.equal(boards.some(board => board.id === 'greenhouse:recent'), false);
   assert.equal(boards.some(board => board.token.startsWith('https://badhost')), false);
   const fallback = await discoverBoards(database, [], async url =>
-    url.includes('workday_companies') ? new Response('', { status: 503 }) : Response.json(directory));
+    url.endsWith('/companies.json') ? Response.json(directory) : new Response('', { status: 503 }));
   assert.ok(fallback.length > 0);
   assert.equal(fallback.some(board => board.provider === 'workday'), false);
+});
+
+test('reverse sweep rotates eight directories and excludes unsafe or recently checked boards', async () => {
+  const database = { query: async () => ({ rows: [
+    { id: 'ashby:ashby-0', checked_at: new Date(), live_india: false },
+  ] }) };
+  const knownBoard = boardsFrom([['greenhouse', 'greenhouse-0', 'Configured']]);
+  const boards = await discoverBoards(database, knownBoard, async url => {
+    if (url.endsWith('/companies.json')) return Response.json([]);
+    if (url.endsWith('/sitemap.xml')) {
+      return new Response('<loc>https://join.com/companies/reverse-join</loc>' +
+        '<loc>https://join.com/companies/reverse-join/job</loc>' +
+        '<loc>https://join.com.example/companies/unsafe</loc>');
+    }
+    if (url.includes('workday_companies')) return Response.json(['global|wd3|External']);
+    if (url.includes('paylocity_companies')) return Response.json([
+      { guid: '73b6525a-3273-48b3-b9d8-d6479233c61c', name: 'Paylocity Example' },
+      { guid: 'bad/token', name: 'Invalid' },
+    ]);
+    const provider = /\/([a-z]+)_companies/.exec(url)[1];
+    return Response.json(['unsafe/token', ...Array.from({ length: 13 }, (_, index) => provider + '-' + index)]);
+  });
+  assert.equal(boards.length, 33);
+  assert.equal(new Set(boards.slice(0, 8).map(board => board.provider)).size, 8);
+  assert.equal(boards.filter(board => board.provider === 'greenhouse').length, 6);
+  assert.ok(boards.every(board => board.discovered && board.fromSweep && !board.token.includes('unsafe')));
+  assert.ok(!boards.some(board => ['ashby:ashby-0', 'greenhouse:greenhouse-0'].includes(board.id)));
 });
 
 test('Greenhouse maps the published date and cleans description and apply URL', async () => {

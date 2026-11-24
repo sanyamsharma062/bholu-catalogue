@@ -1,7 +1,8 @@
 import { boardsFrom } from './feeds.mjs';
 
 const directory = 'https://raw.githubusercontent.com/ConorsCode/open-jobs-data/main/companies.json';
-const workdayDirectory = 'https://raw.githubusercontent.com/Riley-Dorrington/job-board-aggregator/main/data/workday_companies.json';
+const directoryRoot = 'https://raw.githubusercontent.com/Riley-Dorrington/job-board-aggregator/main/data/';
+const sweepProviders = ['greenhouse', 'lever', 'ashby', 'bamboohr', 'icims'];
 const supported = new Set(['greenhouse', 'ashby', 'lever', 'workable', 'recruitee', 'bamboohr', 'smartrecruiters']);
 const workdayNames = {
   aliaxis: 'Aliaxis', alliancedata: 'Bread Financial', armaninollp: 'Armanino',
@@ -26,20 +27,62 @@ async function publicBoards(fetcher) {
     .map(row => [row.platform, row.slug, row.name]);
 }
 
-async function indiaWorkdayBoards(fetcher) {
-  const data = await readDirectory(workdayDirectory, 25000, fetcher);
+async function workdayBoards(fetcher) {
+  const data = await readDirectory(`${directoryRoot}workday_companies.json`, 25000, fetcher);
   return data.flatMap(row => {
     const match = typeof row === 'string' && /^([a-z0-9-]{1,60})\|(wd\d{1,3})\|([a-z0-9_-]{1,100})$/i.exec(row);
     if (!match) return [];
     const [, tenant, location, site] = match;
-    const employer = Object.hasOwn(workdayNames, tenant) ? workdayNames[tenant] : null;
-    if (!employer || !/india/i.test(site)) return [];
-    return [['workday', `https://${tenant}.${location}.myworkdayjobs.com/${site}`, employer]];
+    const employer = Object.hasOwn(workdayNames, tenant) ? workdayNames[tenant] : boardName(tenant);
+    return [['workday', `https://${tenant}.${location}.myworkdayjobs.com/${site}`, employer, !/india/i.test(site)]];
   });
 }
 
+function boardName(token) {
+  const name = token.replace(/^careers?-/, '').replace(/[-_]+/g, ' ').trim() || token;
+  return name[0].toUpperCase() + name.slice(1);
+}
+
+async function sweepBoards(provider, fetcher) {
+  const data = await readDirectory(`${directoryRoot}${provider}_companies.json`, 25000, fetcher);
+  return data.flatMap(token => {
+    if (typeof token !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(token)) return [];
+    return [[provider, token, boardName(token), true]];
+  });
+}
+
+async function paylocityBoards(fetcher) {
+  const data = await readDirectory(`${directoryRoot}paylocity_companies_clean.json`, 25000, fetcher);
+  return data.flatMap(row => /^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(row?.guid) &&
+    typeof row.name === 'string' && row.name.trim() && row.name.length <= 180
+    ? [['paylocity', row.guid, row.name, true]] : []);
+}
+
+async function joinBoards(fetcher) {
+  const response = await fetcher('https://join.com/companies/sitemap.xml', {
+    redirect: 'error', signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok || !response.body) throw new Error('JOIN directory unavailable');
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > 3 * 1024 * 1024) throw new Error('JOIN directory exceeds size limit');
+    chunks.push(chunk);
+  }
+  return Array.from(Buffer.concat(chunks).toString('utf8')
+    .matchAll(/<loc>https:\/\/join\.com\/companies\/([a-z0-9][a-z0-9_-]{0,79})<\/loc>/gi),
+  ([, token]) => ['join', token, boardName(token), true]);
+}
+
 export async function discoverBoards(pool, builtIn, fetcher = fetch) {
-  const results = await Promise.allSettled([publicBoards(fetcher), indiaWorkdayBoards(fetcher)]);
+  const results = await Promise.allSettled([
+    publicBoards(fetcher),
+    workdayBoards(fetcher),
+    ...sweepProviders.map(provider => sweepBoards(provider, fetcher)),
+    paylocityBoards(fetcher),
+    joinBoards(fetcher),
+  ]);
   if (results.every(result => result.status === 'rejected')) {
     throw new Error('Employer directories unavailable');
   }
@@ -49,7 +92,9 @@ export async function discoverBoards(pool, builtIn, fetcher = fetch) {
     if (result.status !== 'fulfilled') continue;
     for (const row of result.value) {
       const [board] = boardsFrom([row]);
-      if (!seen.has(board.id) && !candidates.has(board.id)) candidates.set(board.id, board);
+      if (!seen.has(board.id) && !candidates.has(board.id)) {
+        candidates.set(board.id, { ...board, discovered: true, fromSweep: row[3] === true });
+      }
     }
   }
   if (!candidates.size) return [];
@@ -63,19 +108,27 @@ export async function discoverBoards(pool, builtIn, fetcher = fetch) {
   const ordered = [...candidates.values()].sort((a, b) => lastCheck(a) - lastCheck(b));
   const active = ordered.filter(board => status.get(board.id)?.live_india).slice(0, 48);
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const due = ordered.filter(board => !status.get(board.id)?.live_india && lastCheck(board) < cutoff);
+  return [
+    ...active,
+    ...rotate(due.filter(board => !board.fromSweep), 24, 6),
+    ...rotate(due.filter(board => board.fromSweep), 48, 6),
+  ];
+}
+
+function rotate(boards, limit, rounds) {
   const byProvider = new Map();
-  for (const board of ordered) {
-    if (status.get(board.id)?.live_india || lastCheck(board) >= cutoff) continue;
+  for (const board of boards) {
     const queue = byProvider.get(board.provider) ?? [];
-    if (queue.length < 6) queue.push(board);
+    if (queue.length < rounds) queue.push(board);
     byProvider.set(board.provider, queue);
   }
-  const due = [];
-  for (let round = 0; round < 6 && due.length < 24; round++) {
+  const selected = [];
+  for (let round = 0; round < rounds && selected.length < limit; round++) {
     for (const queue of byProvider.values()) {
-      if (queue[round]) due.push(queue[round]);
-      if (due.length >= 24) break;
+      if (queue[round]) selected.push(queue[round]);
+      if (selected.length >= limit) break;
     }
   }
-  return [...active, ...due].map(board => ({ ...board, discovered: true }));
+  return selected;
 }

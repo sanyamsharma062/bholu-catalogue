@@ -159,13 +159,17 @@ test('reverse sweep rotates eight directories and excludes unsafe or recently ch
       { guid: 'bad/token', name: 'Invalid' },
     ]);
     const provider = /\/([a-z]+)_companies/.exec(url)[1];
-    return Response.json(['unsafe/token', ...Array.from({ length: 13 }, (_, index) => provider + '-' + index)]);
+    return Response.json(['unsafe/token', ...Array.from({ length: 13 }, (_, index) => provider + '-' + index),
+      provider + '-bengaluru', provider + '-india', provider + '-pune']);
   });
   assert.equal(boards.length, 33);
   assert.equal(new Set(boards.slice(0, 8).map(board => board.provider)).size, 8);
   assert.equal(boards.filter(board => board.provider === 'greenhouse').length, 6);
   assert.ok(boards.every(board => board.discovered && board.fromSweep && !board.token.includes('unsafe')));
   assert.ok(!boards.some(board => ['ashby:ashby-0', 'greenhouse:greenhouse-0'].includes(board.id)));
+  const greenhouse = boards.filter(board => board.provider === 'greenhouse').map(board => board.token);
+  assert.deepEqual(greenhouse, ['greenhouse-bengaluru', 'greenhouse-india',
+    'greenhouse-1', 'greenhouse-2', 'greenhouse-3', 'greenhouse-4']);
 });
 
 test('Greenhouse maps the published date and cleans description and apply URL', async () => {

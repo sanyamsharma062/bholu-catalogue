@@ -3,6 +3,7 @@ import { boardsFrom } from './feeds.mjs';
 const directory = 'https://raw.githubusercontent.com/ConorsCode/open-jobs-data/main/companies.json';
 const directoryRoot = 'https://raw.githubusercontent.com/Riley-Dorrington/job-board-aggregator/main/data/';
 const sweepProviders = ['greenhouse', 'lever', 'ashby', 'bamboohr', 'icims'];
+const indiaHint = /(?:^|[^a-z])(?:india|bengaluru|bangalore|pune|hyderabad|mumbai|delhi|chennai|kolkata|noida|gurgaon|gurugram|kochi|ahmedabad)(?:$|[^a-z])/i;
 const supported = new Set(['greenhouse', 'ashby', 'lever', 'workable', 'recruitee', 'bamboohr', 'smartrecruiters']);
 const workdayNames = {
   aliaxis: 'Aliaxis', alliancedata: 'Bread Financial', armaninollp: 'Armanino',
@@ -112,20 +113,24 @@ export async function discoverBoards(pool, builtIn, fetcher = fetch) {
   return [
     ...active,
     ...rotate(due.filter(board => !board.fromSweep), 24, 6),
-    ...rotate(due.filter(board => board.fromSweep), 48, 6),
+    ...rotate(due.filter(board => board.fromSweep), 48, 6, true),
   ];
 }
 
-function rotate(boards, limit, rounds) {
+function rotate(boards, limit, rounds, prioritizeIndia = false) {
   const byProvider = new Map();
   for (const board of boards) {
-    const queue = byProvider.get(board.provider) ?? [];
-    if (queue.length < rounds) queue.push(board);
+    const queue = byProvider.get(board.provider) ?? { general: [], hinted: [] };
+    const hinted = prioritizeIndia && (indiaHint.test(board.employer) || indiaHint.test(board.token));
+    const lane = hinted ? queue.hinted : queue.general;
+    if (lane.length < rounds) lane.push(board);
     byProvider.set(board.provider, queue);
   }
+  const queues = [...byProvider.values()].map(({ general, hinted }) =>
+    [...hinted.slice(0, 2), ...general, ...hinted.slice(2)]);
   const selected = [];
   for (let round = 0; round < rounds && selected.length < limit; round++) {
-    for (const queue of byProvider.values()) {
+    for (const queue of queues) {
       if (queue[round]) selected.push(queue[round]);
       if (selected.length >= limit) break;
     }

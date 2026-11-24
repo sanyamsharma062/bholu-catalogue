@@ -7,6 +7,61 @@ import { catalogServer } from './server.mjs';
 import { discoverBoards } from './directory.mjs';
 import { fetchWorkableIndex } from './workable-index.mjs';
 
+test('Paylocity uses visible India locations and original dates and drops closed or internal jobs', async () => {
+  const [board] = boardsFrom([['paylocity', 'a432d829-f701-4cf3-9108-56ef703b2ac5', 'Example']]);
+  const row = (id, country, flags = {}) => ({ JobId: id, JobTitle: 'Graduate Engineer',
+    JobLocation: { Country: country, City: 'Pune' }, LocationName: 'Hybrid',
+    PublishedDate: '2026-11-23T13:35:16-05:00', ...flags });
+  const result = await fetchBoard(board, async url => {
+    const path = new URL(url).pathname;
+    if (path.includes('/All/')) return new Response('<script>window.pageData = ' + JSON.stringify({
+      ModuleTitle: 'Example', Jobs: [row(12, 'IND'), row(13, 'IND'), row(14, 'IND', { IsInternal: true }),
+        row(15, 'IND', { ShouldDisplayLocation: false })],
+    }) + ';</script>');
+    if (path.endsWith('/13')) return new Response('', {status: 404});
+    return new Response('<script type="application/ld+json">' + JSON.stringify({
+      '@type': 'JobPosting', description: '<p>Build Java APIs.</p>', employmentType: 'FULL_TIME',
+    }) + '</script>');
+  });
+  assert.equal(result.jobs.length, 1);
+  assert.equal(result.jobs[0].posted, '2026-11-23T18:35:16.000Z');
+  assert.equal(result.jobs[0].description, 'Build Java APIs.');
+  assert.equal(result.jobs[0].location, 'Hybrid, Pune, India');
+  assert.equal(result.jobs[0].url, 'https://recruiting.paylocity.com/Recruiting/Jobs/Details/12');
+});
+
+test('JOIN paginates India boards and takes the employer publication date from structured detail', async () => {
+  const [board] = boardsFrom([['join', 'team', 'Example']]);
+  const row = (id, title) => ({ id, idParam: id + '-job', title, createdAt: '2026-11-21T00:00:00Z',
+    city: { cityName: id === 1 ? 'London' : 'Bengaluru', countryName: id === 1 ? 'United Kingdom' : 'India' },
+    workplaceType: 'HYBRID' });
+  const employerPage = (page, items) => '<script id="__NEXT_DATA__" type="application/json">' +
+    JSON.stringify({ props: { pageProps: { pageData: { company: { name: 'Example' },
+      jobs: { pagination: { page, pageCount: 2 }, items } } } } }) + '</script>';
+  const calls = [];
+  const result = await fetchBoard(board, async url => {
+    const path = new URL(url);
+    calls.push(path.pathname + path.search);
+    if (path.pathname.endsWith('/team')) {
+      return new Response(path.search ? employerPage(2, [row(2, 'Graduate Engineer'), row(3, 'Intern')])
+        : employerPage(1, [row(1, 'Overseas Engineer')]));
+    }
+    if (path.pathname.endsWith('3-job')) return new Response('', { status: 410 });
+    return new Response('<script type="application/ld+json">' + JSON.stringify({
+      '@type': 'JobPosting', title: 'Graduate Engineer', description: '<p>Build Java APIs.</p>',
+      datePosted: '2026-11-24T14:00:00Z', employmentType: 'FULL_TIME',
+    }) + '</script>');
+  });
+  assert.deepEqual(calls, ['/companies/team', '/companies/team?page=2',
+    '/companies/team/2-job', '/companies/team/3-job']);
+  assert.equal(result.complete, true);
+  assert.equal(result.jobs.length, 1);
+  assert.equal(result.jobs[0].posted, '2026-11-24T14:00:00.000Z');
+  assert.equal(result.jobs[0].description, 'Build Java APIs.');
+  assert.equal(result.jobs[0].kind, 'Full-time');
+  assert.equal(result.jobs[0].source, 'JOIN');
+});
+
 test('Workable index streams India listings with original links, dates, and clean descriptions', async () => {
   const job = (country, code, date) => `<job><title>Junior Developer</title><date>${date}</date>
     <url><![CDATA[https://apply.workable.com/example/j/${code}/?utm_source=original]]></url>

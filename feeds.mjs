@@ -8,7 +8,7 @@ const providers = {
   smartrecruiters: 'SmartRecruiters', workday: 'Workday',
   workable: 'Workable', recruitee: 'Recruitee', bamboohr: 'BambooHR',
   honeywell: 'Honeywell', amazon: 'Amazon Jobs',
-  icims: 'iCIMS', speedrun: 'a16z Speedrun',
+  icims: 'iCIMS', speedrun: 'a16z Speedrun', join: 'JOIN', paylocity: 'Paylocity',
 };
 const workdaySite = /^https:\/\/([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com\/[a-z0-9_-]+$/i;
 export const indiaLocation = /\b(?:india|bengaluru|bangalore|pune|hyderabad|mumbai|delhi|chennai|kolkata|noida|gurgaon|gurugram|kochi|ahmedabad|bhubaneswar|vadodara|coimbatore)\b/i;
@@ -113,8 +113,8 @@ export function jobFrom({ url, title, employer, location, description, posted, e
     posted: timestamp(posted), validThrough: timestamp(expires),
     minimumExperience: Number.isFinite(years) && years >= 0 ? Math.ceil(years) : minimumExperience(description),
     kind: /\bintern(?:ship)?\b/i.test(kind ?? '') ? 'Internship'
-      : /\bfull[ -]?time\b/i.test(kind ?? '') ? 'Full-time'
-      : /\bpart[ -]?time\b/i.test(kind ?? '') ? 'Part-time'
+      : /\bfull[ _-]?time\b/i.test(kind ?? '') ? 'Full-time'
+      : /\bpart[ _-]?time\b/i.test(kind ?? '') ? 'Part-time'
       : /\bcontract(?:or)?\b/i.test(kind ?? '') ? 'Contract' : '',
     workplace: ['remote', 'hybrid', 'onsite'].includes(workplace?.toLowerCase())
       ? workplace[0].toUpperCase() + workplace.slice(1).toLowerCase() : '',
@@ -164,6 +164,8 @@ export async function fetchBoard(board, fetcher) {
   }
   fetcher ??= fetch;
   if (provider === 'icims') return fetchIcims(board, fetcher);
+  if (provider === 'join') return fetchJoin(board, fetcher);
+  if (provider === 'paylocity') return fetchPaylocity(board, fetcher);
   if (provider === 'speedrun') return fetchSpeedrun(fetcher);
   if (provider === 'honeywell' || provider === 'amazon') return fetchIndiaEmployer(board, fetcher);
   if (provider === 'smartrecruiters') return fetchSmartRecruiters(board, fetcher);
@@ -212,6 +214,115 @@ export async function fetchBoard(board, fetcher) {
   }
   if (rows.length && !jobs.size && rows.some(row => row?.isListed !== false)) throw new Error('No usable records in a nonempty feed');
   return { jobs: [...jobs.values()], complete };
+}
+
+function structuredPosting(doc) {
+  for (const script of DomUtils.findAll(node => node.name === 'script' &&
+      node.attribs?.type === 'application/ld+json', doc.children)) {
+    let data;
+    try { data = JSON.parse(DomUtils.textContent(script)); } catch { continue; }
+    const records = Array.isArray(data) ? data : data?.['@graph'] ?? [data];
+    if (!Array.isArray(records)) continue;
+    const posting = records.find(entry => entry?.['@type'] === 'JobPosting');
+    if (posting) return posting;
+  }
+  return null;
+}
+
+async function fetchPaylocity({ token, employer }, fetcher) {
+  if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(token)) {
+    throw new Error('Invalid Paylocity board');
+  }
+  const base = 'https://recruiting.paylocity.com/Recruiting/Jobs';
+  const html = await readBody(`${base}/All/${token}`, { fetcher, accept: 'text/html', timeout: 12000 });
+  const json = /window\.pageData\s*=\s*(\{[\s\S]*?\});\s*<\/script>/i.exec(html)?.[1];
+  const data = JSON.parse(json ?? 'null');
+  if (!Array.isArray(data?.Jobs)) throw new Error('Invalid Paylocity board');
+  const matches = new Map();
+  for (const row of data.Jobs) {
+    if (!row || row.IsInternal || row.ShouldDisplayLocation === false || !/^\d+$/.test(String(row.JobId))) continue;
+    const geography = row.JobLocation;
+    const location = [...new Set([row.LocationName, geography?.City, geography?.Metro,
+      ['IND', 'IN'].includes(geography?.Country) ? 'India' : null,
+      row.IsRemote ? 'Remote' : null].filter(value => typeof value === 'string' && value.trim()))].join(', ');
+    if (indiaLocation.test(location)) matches.set(row.JobId, { row, location });
+  }
+  const jobs = await collectDetails([...matches.values()].slice(0, 24), async ({ row, location }) => {
+    const url = `${base}/Details/${row.JobId}`;
+    let detail;
+    let description;
+    try {
+      const doc = parseDocument(await readBody(url, { fetcher, accept: 'text/html', timeout: 8000 }));
+      detail = structuredPosting(doc);
+      const body = DomUtils.findOne(node => (node.attribs?.class ?? '').split(/\s+/)
+        .some(name => ['job-description', 'job-description-content'].includes(name)), doc.children);
+      description = body ? DomUtils.getInnerHTML(body) : null;
+    } catch (error) {
+      if (['HTTP 404', 'HTTP 410'].includes(error.message)) return null;
+    }
+    const job = jobFrom({ url, title: row.JobTitle, employer: data.ModuleTitle || employer, location,
+      description: detail?.description ?? description ?? row.Description,
+      posted: indiaDate(row.PublishedDate ?? detail?.datePosted),
+      expires: indiaDate(detail?.validThrough, true), kind: detail?.employmentType,
+      workplace: row.IsRemote ? 'Remote' : /\bhybrid\b/i.test(location) ? 'Hybrid' : '', source: providers.paylocity });
+    return job && !detail?.description && !description ? { ...job, detailPending: true } : job;
+  });
+  return { jobs: jobs.filter(Boolean), complete: matches.size <= 24 };
+}
+
+async function fetchJoin({ token, employer }, fetcher) {
+  const base = `https://join.com/companies/${token}`;
+  const rows = new Map();
+  let complete = false;
+  for (let page = 1; page <= 6; page++) {
+    let state;
+    try {
+      const document = parseDocument(await readBody(page === 1 ? base : `${base}?page=${page}`,
+        { fetcher, accept: 'text/html', timeout: 10000 }));
+      const script = DomUtils.findOne(node => node.attribs?.id === '__NEXT_DATA__', document.children);
+      const props = JSON.parse(script ? DomUtils.textContent(script) : 'null')?.props?.pageProps;
+      state = props?.pageData ?? props?.initialState;
+      if (!Array.isArray(state?.jobs?.items)) throw new Error('Invalid JOIN board');
+    } catch (error) {
+      if (page === 1) throw error;
+      break;
+    }
+    const pagination = state.jobs.pagination;
+    if (pagination?.page != null && Number(pagination.page) !== page) break;
+    for (const row of state.jobs.items) {
+      const key = String(row?.idParam ?? row?.id ?? '');
+      if (!/^\d+(?:-[a-z0-9._%-]{1,220})?$/i.test(key)) continue;
+      const workplace = { ONSITE: 'Onsite', REMOTE: 'Remote', HYBRID: 'Hybrid' }[row.workplaceType] ?? '';
+      const location = [...new Set([row.city?.cityName, row.city?.countryName, row.country?.name,
+        row.country?.iso3166 === 'IN' ? 'India' : '', workplace === 'Remote' ? 'Remote' : ''].filter(Boolean))].join(', ');
+      if (!indiaLocation.test(location)) continue;
+      rows.set(key, { row, workplace, location, company: state.company?.name || employer });
+    }
+    if (Number.isInteger(pagination?.pageCount) && page >= pagination.pageCount) {
+      complete = true;
+      break;
+    }
+    if (!pagination || state.jobs.items.length === 0) break;
+  }
+
+  const jobs = await collectDetails([...rows].slice(0, 24), async ([key, item]) => {
+    const url = `${base}/${key}`;
+    let detail;
+    try {
+      const doc = parseDocument(await readBody(url, { fetcher, accept: 'text/html', timeout: 8000 }));
+      detail = structuredPosting(doc);
+    } catch (error) {
+      if (['HTTP 404', 'HTTP 410'].includes(error.message)) return null;
+    }
+    const job = jobFrom({ url, title: detail?.title ?? item.row.title, employer: item.company,
+      location: item.location, description: detail?.description ?? item.row.description,
+      posted: indiaDate(detail?.datePosted ?? item.row.publishedAt),
+      expires: indiaDate(detail?.validThrough, true),
+      kind: Array.isArray(detail?.employmentType) ? detail.employmentType[0] : detail?.employmentType,
+      workplace: item.workplace, source: providers.join });
+    return job && !detail ? { ...job, detailPending: true } : job;
+  });
+  return { jobs: jobs.filter(Boolean), complete: complete && rows.size <= 24 };
 }
 
 async function fetchIcims({ token, employer }, fetcher) {

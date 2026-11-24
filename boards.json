@@ -1,4 +1,11 @@
 [
+  ["paylocity", "a432d829-f701-4cf3-9108-56ef703b2ac5", "CloudBees"],
+  ["paylocity", "3d8a03f1-53c9-4e59-8407-d9a8eaca6c62", "Deep Sync"],
+  ["paylocity", "83e6aeca-9d43-4e7f-9a79-d1da7020ce08", "Cequence"],
+  ["join", "enterprisebot", "Enterprise Bot"],
+  ["join", "generalmindcom", "GeneralMind"],
+  ["join", "crewmeister", "Crewmeister"],
+  ["join", "transperfectcom", "DataForce by TransPerfect"],
   ["workable", "caxton", "Caxton Associates"],
   ["workable", "prox-works", "Proximity Works"],
   ["workable", "updraft", "Updraft"],

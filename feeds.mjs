@@ -93,7 +93,7 @@ function minimumExperience(description) {
   return match ? Number(match[1] ?? match[2]) : null;
 }
 
-function jobFrom({ url, title, employer, location, description, posted, expires, kind, workplace, source, years }) {
+export function jobFrom({ url, title, employer, location, description, posted, expires, kind, workplace, source, years }) {
   const address = cleanUrl(url);
   title = text(title, 240);
   employer = text(employer, 200);
@@ -103,8 +103,11 @@ function jobFrom({ url, title, employer, location, description, posted, expires,
   const greenhouseId = address.searchParams.get('gh_jid') ??
     (['boards.greenhouse.io', 'job-boards.greenhouse.io'].includes(address.hostname)
       ? /\/jobs\/(\d+)\/?$/.exec(address.pathname)?.[1] : null);
+  const workableId = address.hostname === 'apply.workable.com'
+    ? /(?:^|\/)j\/([a-z0-9]+)(?:\/|$)/i.exec(address.pathname)?.[1] : null;
   const id = greenhouseId && /^\d+$/.test(greenhouseId)
-    ? `greenhouse:${greenhouseId}` : address.href;
+    ? `greenhouse:${greenhouseId}`
+    : workableId ? `workable:${workableId.toLowerCase()}` : address.href;
   return {
     id, title, company: employer, location, description, source, url: address.href,
     posted: timestamp(posted), validThrough: timestamp(expires),

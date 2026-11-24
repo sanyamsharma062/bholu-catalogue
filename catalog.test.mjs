@@ -5,6 +5,37 @@ import { database, migrate, replaceFeed, recordFailure } from './database.mjs';
 import { boardsFrom, configuredGlassdoor, fetchBoard, fetchGlassdoor, glassdoorFeed } from './feeds.mjs';
 import { catalogServer } from './server.mjs';
 import { discoverBoards } from './directory.mjs';
+import { fetchWorkableIndex } from './workable-index.mjs';
+
+test('Workable index streams India listings with original links, dates, and clean descriptions', async () => {
+  const job = (country, code, date) => `<job><title>Junior Developer</title><date>${date}</date>
+    <url><![CDATA[https://apply.workable.com/example/j/${code}/?utm_source=original]]></url>
+    <company>Example</company><city>Pune</city><country>${country}</country><remote>true</remote>
+    <description><![CDATA[<p>Build Java services &amp; tools.</p>]]></description><jobtype>Full-time</jobtype></job>`;
+  const xml = '<source>' + job('IN', 'abc12', 'Sun, 29 Dec 2019 11:02:25 UTC') +
+    job('US', 'def12', '') + job('IN', 'undated', 'yesterday') + '</source>';
+  const response = text => new Response(new ReadableStream({
+    start(controller) {
+      for (let index = 0; index < text.length; index += 11) {
+        controller.enqueue(new TextEncoder().encode(text.slice(index, index + 11)));
+      }
+      controller.close();
+    },
+  }));
+  const result = await fetchWorkableIndex(async (url, options) => {
+    assert.equal(url, 'https://www.workable.com/boards/workable.xml');
+    assert.equal(options.headers['Accept-Encoding'], 'gzip');
+    return response(xml);
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.jobs.length, 2);
+  assert.equal(result.jobs[0].id, 'workable:abc12');
+  assert.equal(result.jobs[0].url, 'https://apply.workable.com/example/j/abc12/?utm_source=original');
+  assert.equal(result.jobs[0].description, 'Build Java services & tools.');
+  assert.equal(result.jobs[0].posted, '2019-12-29T11:02:25.000Z');
+  assert.equal(result.jobs[1].posted, null);
+  await assert.rejects(fetchWorkableIndex(async () => response(xml.slice(0, -9))), /Incomplete/);
+});
 
 test('directory probes different providers, skips recent failures, and survives one source failing', async () => {
   const database = {

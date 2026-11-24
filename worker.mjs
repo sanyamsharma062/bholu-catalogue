@@ -3,6 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { database, migrate, replaceFeed, recordFailure } from './database.mjs';
 import { boardsFrom, configuredGlassdoor, fetchBoard, fetchGlassdoor, fetchLicensed, glassdoorFeed, indiaLocation } from './feeds.mjs';
 import { discoverBoards } from './directory.mjs';
+import { fetchWorkableIndex, workableIndex } from './workable-index.mjs';
 
 const pool = database();
 const boards = boardsFrom(JSON.parse(await readFile(process.env.BHOLU_BOARDS_FILE ?? new URL('./boards.json', import.meta.url), 'utf8')));
@@ -20,6 +21,11 @@ async function refresh() {
     if (!acquired) return;
     const feeds = [...builtInFeeds];
     if (!process.env.BHOLU_BOARDS_FILE && process.env.DISCOVER_EMPLOYERS !== 'false') {
+      const { rowCount } = await pool.query(
+        "SELECT 1 FROM catalog_feeds WHERE id=$1 AND checked_at >= now() - interval '1 hour'",
+        [workableIndex.id],
+      );
+      if (!rowCount) feeds.push([workableIndex, fetchWorkableIndex]);
       try {
         const discovered = await discoverBoards(pool, boards);
         feeds.push(...discovered.map(board => [board, async () => {

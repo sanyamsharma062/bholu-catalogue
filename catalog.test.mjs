@@ -4,6 +4,33 @@ import { test } from 'node:test';
 import { database, migrate, replaceFeed, recordFailure } from './database.mjs';
 import { boardsFrom, configuredGlassdoor, fetchBoard, fetchGlassdoor, glassdoorFeed } from './feeds.mjs';
 import { catalogServer } from './server.mjs';
+import { discoverBoards } from './directory.mjs';
+
+test('directory probes different providers, skips recent failures, and survives one source failing', async () => {
+  const database = {
+    query: async () => ({ rows: [
+      { id: 'ashby:active', live_india: true, checked_at: new Date() },
+      { id: 'greenhouse:recent', live_india: false, checked_at: new Date() },
+    ] }),
+  };
+  const directory = [
+    ...Array.from({ length: 20 }, (_, index) => ({ platform: 'greenhouse', slug: 'company' + index, name: 'Company ' + index })),
+    { platform: 'greenhouse', slug: 'recent', name: 'Recent' },
+    { platform: 'ashby', slug: 'active', name: 'Active' },
+    { platform: 'lever', slug: 'new', name: 'New' },
+  ];
+  const workday = ['phreesia|wd1|phreesiaindia', 'badhost|wd1|india'];
+  const fetcher = async url => Response.json(url.includes('workday_companies') ? workday : directory);
+  const boards = await discoverBoards(database, [], fetcher);
+  assert.deepEqual(boards.slice(0, 4).map(board => board.provider), ['ashby', 'greenhouse', 'lever', 'workday']);
+  assert.equal(boards.filter(board => board.provider === 'greenhouse').length, 6);
+  assert.equal(boards.some(board => board.id === 'greenhouse:recent'), false);
+  assert.equal(boards.some(board => board.token.startsWith('https://badhost')), false);
+  const fallback = await discoverBoards(database, [], async url =>
+    url.includes('workday_companies') ? new Response('', { status: 503 }) : Response.json(directory));
+  assert.ok(fallback.length > 0);
+  assert.equal(fallback.some(board => board.provider === 'workday'), false);
+});
 
 test('Greenhouse maps the published date and cleans description and apply URL', async () => {
   const [board] = boardsFrom([['greenhouse', 'example', 'Example']]);

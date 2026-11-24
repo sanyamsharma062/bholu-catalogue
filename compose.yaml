@@ -1,0 +1,50 @@
+x-catalog: &catalog
+  build: .
+  restart: unless-stopped
+  environment: &catalog-env
+    PGHOST: postgres
+    PGDATABASE: bholu
+    PGUSER: bholu
+    PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    FREEHIRE_LICENSED: ${FREEHIRE_LICENSED:-false}
+    FREEHIRE_API_KEY: ${FREEHIRE_API_KEY:-}
+    GLASSDOOR_LICENSED: ${GLASSDOOR_LICENSED:-false}
+    GLASSDOOR_FEED_URL: ${GLASSDOOR_FEED_URL:-}
+    GLASSDOOR_FEED_TOKEN: ${GLASSDOOR_FEED_TOKEN:-}
+    REFRESH_MINUTES: ${REFRESH_MINUTES:-60}
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bholu
+      POSTGRES_USER: bholu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U bholu -d bholu']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - catalogue:/var/lib/postgresql/data
+  api:
+    <<: *catalog
+    environment:
+      <<: *catalog-env
+      SERPAPI_KEY: ${SERPAPI_KEY:-}
+      WEB_SEARCH_DAILY_LIMIT: ${WEB_SEARCH_DAILY_LIMIT:-30}
+    ports:
+      - '127.0.0.1:8788:8788'
+  worker:
+    <<: *catalog
+    environment:
+      <<: *catalog-env
+      DISCOVER_EMPLOYERS: ${DISCOVER_EMPLOYERS:-true}
+    command: [node, worker.mjs, --watch]
+
+volumes:
+  catalogue:

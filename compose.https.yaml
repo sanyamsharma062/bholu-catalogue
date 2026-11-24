@@ -1,0 +1,17 @@
+services:
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      BHOLU_PUBLIC_HOST: ${BHOLU_PUBLIC_HOST:?Set BHOLU_PUBLIC_HOST to the catalogue DNS hostname}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - catalogue_tls:/data
+    depends_on:
+      - api
+
+volumes:
+  catalogue_tls:

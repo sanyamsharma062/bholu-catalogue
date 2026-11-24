@@ -1,0 +1,68 @@
+name: Refresh public Bholu jobs
+
+on:
+  schedule:
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-jobs
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bholu-ci-local
+          POSTGRES_DB: bholu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bholu"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:bholu-ci-local@localhost:5432/bholu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache/restore@v4
+        with:
+          path: .refresh-state
+          key: catalogue-pg17-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: catalogue-pg17-v1-
+      - name: Restore public-feed refresh state
+        run: |
+          if test -s .refresh-state/catalogue.sql.gz; then
+            gzip -dc .refresh-state/catalogue.sql.gz | docker exec -i "${{ job.services.postgres.id }}" psql -X -v ON_ERROR_STOP=1 -U postgres -d bholu
+          fi
+      - name: Refresh listings and export the public catalogue
+        run: |
+          npm run refresh
+          node export-public.mjs
+      - name: Deploy to Cloudflare Workers Free
+        run: npx --yes wrangler@4.167.0 deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Save refresh state
+        run: |
+          mkdir -p .refresh-state
+          docker exec "${{ job.services.postgres.id }}" pg_dump --no-owner --no-acl -U postgres -d bholu | gzip > .refresh-state/catalogue.sql.gz
+      - uses: actions/cache/save@v4
+        with:
+          path: .refresh-state
+          key: catalogue-pg17-v1-${{ github.run_id }}-${{ github.run_attempt }}

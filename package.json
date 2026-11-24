@@ -1,0 +1,18 @@
+{
+  "name": "bholu-job-catalog",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "refresh": "node worker.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "html-to-text": "^10.0.1",
+    "htmlparser2": "10.1.0",
+    "pg": "^8.23.1"
+  }
+}
